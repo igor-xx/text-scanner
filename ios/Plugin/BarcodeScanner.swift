@@ -17,6 +17,10 @@ typealias MLKitBarcodeScanner = MLKitBarcodeScanning.BarcodeScanner
     private var scanCompletionHandler: (([Barcode]?, AVCaptureVideoOrientation?, String?) -> Void)?
     private var textRecognitionHandler: ((String) -> Void)?
 
+    private var wasOpaque: Bool? = nil
+    private var prevBackgroundColor: UIColor?
+    private var prevScrollViewBackgroundColor: UIColor?
+
     init(plugin: BarcodeScannerPlugin) {
         self.plugin = plugin
     }
@@ -32,10 +36,12 @@ typealias MLKitBarcodeScanner = MLKitBarcodeScanning.BarcodeScanner
             do {
                 let cameraView = try BarcodeScannerView(implementation: self, settings: settings)
                 cameraView.delegate = self
+                self.hideWebViewBackground()
                 webView.superview?.insertSubview(cameraView, belowSubview: webView)
                 self.cameraView = cameraView
                 completion(nil)
             } catch let error {
+                self.restoreWebViewBackground()
                 CAPLog.print(error.localizedDescription, error)
                 completion(error.localizedDescription)
             }
@@ -44,6 +50,7 @@ typealias MLKitBarcodeScanner = MLKitBarcodeScanning.BarcodeScanner
 
     @objc public func stopScan() {
         DispatchQueue.main.async {
+            self.restoreWebViewBackground()
             self.cameraView?.removeFromSuperview()
             self.cameraView = nil
         }
@@ -235,6 +242,10 @@ typealias MLKitBarcodeScanner = MLKitBarcodeScanning.BarcodeScanner
         guard let webView = self.plugin.webView else {
             return
         }
+        self.wasOpaque = webView.isOpaque
+        self.prevBackgroundColor = webView.backgroundColor
+        self.prevScrollViewBackgroundColor = webView.scrollView.backgroundColor
+
         webView.isOpaque = false
         webView.backgroundColor = UIColor.clear
         webView.scrollView.backgroundColor = UIColor.clear
@@ -243,13 +254,16 @@ typealias MLKitBarcodeScanner = MLKitBarcodeScanning.BarcodeScanner
     /**
      * Must run on UI thread.
      */
-    private func showWebViewBackground() {
+    private func restoreWebViewBackground() {
         guard let webView = self.plugin.webView else {
             return
         }
-        webView.isOpaque = true
-        webView.backgroundColor = UIColor.white
-        webView.scrollView.backgroundColor = UIColor.white
+
+        if (self.wasOpaque != nil) {
+            webView.isOpaque = self.wasOpaque!
+            webView.backgroundColor = self.prevBackgroundColor
+            webView.scrollView.backgroundColor = self.prevScrollViewBackgroundColor
+        }
     }
 
     private func handleScannedBarcode(barcode: Barcode, imageSize: CGSize, videoOrientation: AVCaptureVideoOrientation?) {
@@ -262,6 +276,7 @@ typealias MLKitBarcodeScanner = MLKitBarcodeScanning.BarcodeScanner
 }
 
 extension BarcodeScanner: BarcodeScannerViewDelegate {
+
     public func onTextRecognized(text: String) {
         if let textRecognitionHandler = self.textRecognitionHandler {
             textRecognitionHandler(text)
