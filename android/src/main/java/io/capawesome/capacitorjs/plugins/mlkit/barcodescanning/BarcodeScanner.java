@@ -40,6 +40,8 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanner;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
 import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.text.TextRecognition;
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 import io.capawesome.capacitorjs.plugins.mlkit.barcodescanning.classes.options.SetZoomRatioOptions;
 import io.capawesome.capacitorjs.plugins.mlkit.barcodescanning.classes.results.GetMaxZoomRatioResult;
 import io.capawesome.capacitorjs.plugins.mlkit.barcodescanning.classes.results.GetMinZoomRatioResult;
@@ -54,6 +56,9 @@ public class BarcodeScanner implements ImageAnalysis.Analyzer {
 
     @Nullable
     private com.google.mlkit.vision.barcode.BarcodeScanner barcodeScannerInstance;
+
+    @Nullable
+    private com.google.mlkit.vision.text.TextRecognizer textRecognizerInstance;
 
     @Nullable
     private Camera camera;
@@ -83,13 +88,13 @@ public class BarcodeScanner implements ImageAnalysis.Analyzer {
     public void startScan(ScanSettings scanSettings, StartScanResultCallback callback) {
         // Stop the camera if running
         stopScan();
-        // Hide WebView background
-        hideWebViewBackground();
 
         this.scanSettings = scanSettings;
 
         BarcodeScannerOptions options = buildBarcodeScannerOptions(scanSettings);
         barcodeScannerInstance = BarcodeScanning.getClient(options);
+
+        textRecognizerInstance = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
 
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build();
         imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(plugin.getContext()), this);
@@ -125,7 +130,6 @@ public class BarcodeScanner implements ImageAnalysis.Analyzer {
      * Must run on UI thread.
      */
     public void stopScan() {
-        showWebViewBackground();
         disableTorch();
         // Stop the camera
         if (processCameraProvider != null) {
@@ -134,6 +138,10 @@ public class BarcodeScanner implements ImageAnalysis.Analyzer {
         processCameraProvider = null;
         camera = null;
         barcodeScannerInstance = null;
+        if (textRecognizerInstance != null) {
+            textRecognizerInstance.close();
+            textRecognizerInstance = null;
+        }
         scanSettings = null;
     }
 
@@ -332,36 +340,43 @@ public class BarcodeScanner implements ImageAnalysis.Analyzer {
         @SuppressLint("UnsafeOptInUsageError")
         Image image = imageProxy.getImage();
 
-        if (image == null || barcodeScannerInstance == null) {
+        if (image == null || barcodeScannerInstance == null || textRecognizerInstance == null) {
             return;
         }
 
         InputImage inputImage = InputImage.fromMediaImage(image, imageProxy.getImageInfo().getRotationDegrees());
         Point imageSize = new Point(inputImage.getWidth(), inputImage.getHeight());
         barcodeScannerInstance
-            .process(inputImage)
-            .addOnSuccessListener(
-                barcodes -> {
-                    if (scanSettings == null) {
-                        // Scanning stopped while processing the image
-                        return;
-                    }
-                    for (Barcode barcode : barcodes) {
-                        handleScannedBarcode(barcode, imageSize);
-                    }
-                }
-            )
-            .addOnFailureListener(
-                exception -> {
-                    handleScanError(exception);
-                }
-            )
-            .addOnCompleteListener(
-                task -> {
-                    imageProxy.close();
-                    image.close();
-                }
-            );
+                .process(inputImage)
+                .addOnSuccessListener(
+                        barcodes -> {
+                            if (scanSettings == null) {
+                                return;
+                            }
+                            for (Barcode barcode : barcodes) {
+                                handleScannedBarcode(barcode, imageSize);
+                            }
+                        }
+                )
+                .addOnFailureListener(this::handleScanError)
+                .addOnCompleteListener(
+                        task -> {
+                            imageProxy.close();
+                            image.close();
+                        }
+                );
+
+        textRecognizerInstance
+                .process(inputImage)
+                .addOnSuccessListener(
+                        visionText -> {
+                            if (scanSettings == null) {
+                                return;
+                            }
+                            handleScannedText(visionText.getText());
+                        }
+                )
+                .addOnFailureListener(this::handleScanError);
     }
 
     public void handleGoogleBarcodeScannerModuleInstallProgress(
@@ -401,6 +416,10 @@ public class BarcodeScanner implements ImageAnalysis.Analyzer {
 
     private void handleScannedBarcode(Barcode barcode, Point imageSize) {
         plugin.notifyBarcodeScannedListener(barcode, imageSize);
+    }
+
+    private void handleScannedText(String text) {
+        plugin.notifyScanErrorListener(text);
     }
 
     private void handleScanError(Exception exception) {
