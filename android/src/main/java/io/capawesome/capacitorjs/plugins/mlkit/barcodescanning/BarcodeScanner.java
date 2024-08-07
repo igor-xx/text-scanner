@@ -419,7 +419,10 @@ public class BarcodeScanner implements ImageAnalysis.Analyzer {
     }
 
     private void handleScannedText(String text) {
-        plugin.notifyScanErrorListener(text);
+        if (text.trim().isBlank()) {
+            return;
+        }
+        plugin.notifyScanTextListener(text);
     }
 
     private void handleScanError(Exception exception) {
